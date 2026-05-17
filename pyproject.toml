@@ -1,0 +1,57 @@
+[project]
+name = "rugguard-verify"
+version = "0.1.0"
+description = "Stand-alone CLI to verify Ed25519-signed JSON reports from RugGuard (pay-per-call pre-trade safety layer for agentic crypto trading)."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "David Bellaiche" },
+]
+keywords = [
+    "rugguard",
+    "x402",
+    "ed25519",
+    "signature",
+    "verify",
+    "audit",
+    "compliance",
+    "crypto",
+    "agent",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security :: Cryptography",
+    "Topic :: Utilities",
+]
+dependencies = [
+    # Ed25519 verification — same library RugGuard uses to sign, so the
+    # bit-for-bit signature path is identical.
+    "cryptography>=42,<46",
+    # Minimal HTTP client to fetch /v1/pubkey. requests stays inside the
+    # stdlib-compatible feature set; no async, no streaming — just GET.
+    "requests>=2.31,<3.0",
+]
+
+[project.urls]
+Homepage = "https://rugguard.redfleet.fr"
+Repository = "https://github.com/dbe006/rugguard-verify"
+Issues = "https://github.com/dbe006/rugguard-verify/issues"
+"RugGuard API" = "https://rugguard.redfleet.fr/openapi.json"
+"Signed report format" = "https://rugguard.redfleet.fr/trust.html"
+
+[project.scripts]
+rugguard-verify = "rugguard_verify.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
