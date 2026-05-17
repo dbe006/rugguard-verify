@@ -14,7 +14,7 @@ import json
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from rugguard_verify.verify import canonicalize, verify_signed_report
+from rugguard_verify.verify import canonicalize, fetch_pubkey, verify_signed_report
 
 
 def _make_signed_report(payload: dict) -> tuple[dict, str]:
@@ -120,3 +120,29 @@ def test_invalid_signature_base64_rejected() -> None:
     result = verify_signed_report(signed, pub_b64)
     assert result.valid is False
     assert "base64" in result.reason.lower()
+
+
+def test_canonicalize_rejects_nan_and_inf() -> None:
+    """allow_nan=False — symmetric with server-side canonicalize. Without this,
+    a verifier consuming an attacker-crafted body containing `NaN` (invalid
+    JSON token) would emit non-JSON canonical bytes and either silently
+    canonicalize wrong or fail loud — we want the latter, and it must mirror
+    the server's behavior exactly."""
+    import pytest
+
+    with pytest.raises(ValueError):
+        canonicalize({"x": float("nan")})
+    with pytest.raises(ValueError):
+        canonicalize({"x": float("inf")})
+    with pytest.raises(ValueError):
+        canonicalize({"x": float("-inf")})
+
+
+def test_fetch_pubkey_rejects_plaintext_url() -> None:
+    """The pubkey endpoint is a trust root — refuse http:// schemes loud."""
+    import pytest
+
+    with pytest.raises(ValueError, match="https"):
+        fetch_pubkey("http://example.com/v1/pubkey")
+    with pytest.raises(ValueError, match="https"):
+        fetch_pubkey("ftp://example.com/v1/pubkey")

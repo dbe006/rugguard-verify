@@ -1,6 +1,6 @@
 [project]
 name = "rugguard-verify"
-version = "0.1.0"
+version = "0.1.1"
 description = "Stand-alone CLI to verify Ed25519-signed JSON reports from RugGuard (pay-per-call pre-trade safety layer for agentic crypto trading)."
 readme = "README.md"
 license = { text = "MIT" }
@@ -32,11 +32,14 @@ classifiers = [
 ]
 dependencies = [
     # Ed25519 verification — same library RugGuard uses to sign, so the
-    # bit-for-bit signature path is identical.
-    "cryptography>=42,<46",
+    # bit-for-bit signature path is identical. Floor 43.0.1 covers 2024
+    # advisories (notably GHSA-9v9h-cgj8-h64p NULL deref in PKCS12); not
+    # exploitable here but pulls a clean baseline into the user's venv.
+    "cryptography>=43.0.1,<46",
     # Minimal HTTP client to fetch /v1/pubkey. requests stays inside the
     # stdlib-compatible feature set; no async, no streaming — just GET.
-    "requests>=2.31,<3.0",
+    # Floor 2.32.4 covers CVE-2024-35195 (Session.verify=False reuse).
+    "requests>=2.32.4,<3.0",
 ]
 
 [project.urls]

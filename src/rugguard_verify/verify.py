@@ -52,8 +52,10 @@ def canonicalize(payload: dict[str, Any]) -> bytes:
     those fields. The canonical form is:
 
       - keys sorted alphabetically
-      - separators=("",", "":") so no whitespace
+      - separators=(",", ":") so no whitespace
       - ensure_ascii=False so any unicode round-trips losslessly
+      - allow_nan=False so NaN/Infinity (not valid JSON) raise rather than
+        emit tokens the server's signing path explicitly rejects
     """
     base = {
         k: v
@@ -65,6 +67,7 @@ def canonicalize(payload: dict[str, Any]) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8")
 
 
@@ -84,11 +87,30 @@ def _decode_pubkey(pubkey_base64: str) -> tuple[Ed25519PublicKey, bytes]:
 
 
 def fetch_pubkey(url: str = _DEFAULT_PUBKEY_URL) -> dict[str, Any]:
-    """Hit /v1/pubkey and return the JSON. Raises requests.RequestException
-    on network failure; raises ValueError on a 'not_configured' response so
-    the caller can distinguish "not signed yet" from "verification failed".
+    """Hit /v1/pubkey and return the JSON.
+
+    Raises:
+      - requests.RequestException on network / TLS / status failure.
+      - ValueError on a non-https URL, a non-'active' status, or a malformed body.
+
+    Disables redirect following — `--pubkey-url` is a TRUST ROOT override:
+    the host that answers is the cryptographic authority for every report
+    verified against the returned pubkey. We never silently follow a 3xx
+    to a different origin. If the configured URL redirects, treat it as
+    a configuration error and fail loud.
     """
-    resp = requests.get(url, timeout=_FETCH_TIMEOUT_S)
+    if not url.lower().startswith("https://"):
+        raise ValueError(
+            f"pubkey URL must use https:// scheme (got {url!r}). The pubkey "
+            "endpoint is a trust root; refusing to fetch it over plaintext."
+        )
+    resp = requests.get(url, timeout=_FETCH_TIMEOUT_S, allow_redirects=False)
+    if resp.is_redirect or resp.is_permanent_redirect:
+        raise ValueError(
+            f"pubkey URL {url!r} returned a redirect (status {resp.status_code}). "
+            "Refusing to follow — the redirect target would become the trust "
+            "root without the user's consent. Use the final URL directly."
+        )
     resp.raise_for_status()
     body = resp.json()
     status = body.get("status")

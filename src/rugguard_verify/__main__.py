@@ -30,19 +30,68 @@ _EXIT_OK = 0
 _EXIT_INVALID = 1
 _EXIT_USAGE = 2
 
+# Hardcoded default trust root — the canonical RugGuard production pubkey
+# endpoint. Overriding this delegates trust to whoever answers the alternate
+# URL, so any non-default value triggers a stderr warning before the fetch.
+_DEFAULT_PUBKEY_URL = "https://rugguard.redfleet.fr/v1/pubkey"
+
+# Cap on the report-file size we'll parse. Real RugGuard responses are ≤ a
+# few KB; a multi-MB file is either a config mistake or a DoS attempt against
+# the verifier's json parser. 16 MiB matches typical HTTP-body limits.
+_MAX_REPORT_BYTES = 16 * 1024 * 1024
+
 
 def _read_report(path: str) -> dict:
+    """Read + parse a JSON report, enforcing the size cap.
+
+    Stdin is harder to size-bound cheaply, so for `-` we read incrementally
+    and abort once we exceed the cap. File paths use `stat()` + `read_bytes()`
+    so we can refuse oversize before allocating.
+    """
     if path == "-":
-        return json.load(sys.stdin)
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+        # Read stdin in bounded chunks; refuse if the total exceeds the cap.
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = sys.stdin.buffer.read(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > _MAX_REPORT_BYTES:
+                raise ValueError(
+                    f"stdin report exceeded {_MAX_REPORT_BYTES} bytes "
+                    "(refusing to parse — real RugGuard responses are KBs)"
+                )
+            chunks.append(chunk)
+        return json.loads(b"".join(chunks).decode("utf-8"))
+    p = Path(path)
+    size = p.stat().st_size
+    if size > _MAX_REPORT_BYTES:
+        raise ValueError(
+            f"report file size {size} exceeds {_MAX_REPORT_BYTES} bytes "
+            "(refusing to parse — real RugGuard responses are KBs)"
+        )
+    return json.loads(p.read_text(encoding="utf-8"))
 
 
 def _resolve_pubkey(args: argparse.Namespace) -> str:
     """Return the pubkey base64 string, in this order of precedence:
-    --pubkey-file > --pubkey-url > default /v1/pubkey URL."""
+    --pubkey-file > --pubkey-url > default /v1/pubkey URL.
+
+    Prints a stderr warning if the resolved URL is not the hardcoded
+    production default — a non-default URL is a trust-root delegation
+    and the user must see that explicitly to defeat social engineering
+    where someone runs `rugguard-verify --pubkey-url https://attacker/...`
+    against a report the attacker pre-signed."""
     if args.pubkey_file:
         return Path(args.pubkey_file).read_text(encoding="utf-8").strip()
     url = args.pubkey_url
+    if url != _DEFAULT_PUBKEY_URL:
+        print(
+            f"warning: trust root is {url} (non-default). The host that "
+            "answers becomes the cryptographic authority for this verification.",
+            file=sys.stderr,
+        )
     pubkey_body = fetch_pubkey(url)
     pubkey = pubkey_body.get("pubkey_base64")
     if not isinstance(pubkey, str):
@@ -68,10 +117,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--pubkey-url",
-        default="https://rugguard.redfleet.fr/v1/pubkey",
+        default=_DEFAULT_PUBKEY_URL,
         help=(
             "URL to fetch the current pubkey from (default: production "
-            "RugGuard /v1/pubkey)."
+            "RugGuard /v1/pubkey). Overriding this delegates the trust "
+            "root to a different server — a stderr warning is printed."
         ),
     )
     parser.add_argument(
@@ -97,7 +147,10 @@ def main() -> int:
 
     try:
         report = _read_report(args.report)
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, ValueError, RecursionError) as exc:
+        # ValueError covers our own size-cap; RecursionError covers
+        # deeply-nested adversarial JSON that blows the Python recursion
+        # limit before json itself raises.
         print(f"error: could not read report: {exc}", file=sys.stderr)
         return _EXIT_USAGE
 
@@ -133,6 +186,21 @@ def main() -> int:
         print(f"  report claims key: {result.report_fingerprint}", file=sys.stderr)
     if result.pubkey_fingerprint:
         print(f"  provided key:      {result.pubkey_fingerprint}", file=sys.stderr)
+    # If the failure is a fingerprint mismatch, the report was almost
+    # certainly signed by a now-rotated key. Point the user at the
+    # historical-key archive so they don't have to figure that out.
+    if (
+        result.report_fingerprint
+        and result.pubkey_fingerprint
+        and result.report_fingerprint != result.pubkey_fingerprint
+    ):
+        print(
+            "  hint: this report appears to be signed by a rotated key. "
+            "Fetch the matching historical pubkey from "
+            "https://rugguard.redfleet.fr/trust.html and re-run with "
+            "--pubkey-file <path-to-archived-key>.",
+            file=sys.stderr,
+        )
     return _EXIT_INVALID
 
 
